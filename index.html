@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Fork Edit - Social Manager</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Cooking Without the Clutter!">
+  <link rel="icon" href="https://forkedit.com/content/images/size/w256h256/format/png/2025/01/tablogo--2-.svg" type="image/png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'post-primary': '#1A1A1A',
+            'post-secondary': '#FFECD1',
+            'post-accent': '#FF4B00',
+            'post-neutral': '#F5F5F5'
+          },
+          borderRadius: {
+            'xl': '1rem',
+            '2xl': '1.5rem'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .neo-border {
+      border: 3px solid #000;
+      box-shadow: 4px 4px 0 0 #000;
+      border-radius: 1rem;
+    }
+
+    .neo-border-sm {
+      border: 2px solid #000;
+      box-shadow: 3px 3px 0 0 #000;
+      border-radius: 0.75rem;
+    }
+
+    @media (max-width: 640px) {
+      .neo-border {
+        border: 2px solid #000;
+        box-shadow: 3px 3px 0 0 #000;
+      }
+
+      .neo-border-sm {
+        border: 1px solid #000;
+        box-shadow: 2px 2px 0 0 #000;
+      }
+    }
+  </style>
+</head>
+
+<body class="bg-post-secondary min-h-screen p-3 md:p-6">
+  <div class="max-w-7xl mx-auto">
+    <!-- Header -->
+    <header class="mb-6">
+      <h1 class="text-3xl md:text-5xl font-black mb-2">Fork Post</h1>
+      <p class="text-lg md:text-xl text-gray-700">Schedule and manage your social presence</p>
+    </header>
+    <!-- New Post Editor Section -->
+    <section id="post-editor-section" class="mb-6">
+      <h2 class="text-xl md:text-2xl font-bold mb-3">New Post</h2>
+      <button onclick="createNewPostEditor()"
+        class="bg-post-accent text-white px-4 py-2 md:px-6 md:py-3 font-bold neo-border rounded-xl hover:translate-x-1 hover:translate-y-1 transition-all mb-4 text-sm md:text-base">
+        + New Post Editor
+      </button>
+      <div id="post-editors" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+    </section>
+    <!-- Scheduled Posts Section -->
+    <section id="scheduled-posts-section">
+      <h2 class="text-xl md:text-2xl font-bold mb-3">Scheduled Posts</h2>
+      <div id="posts-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+    </section>
+  </div>
+
+  <script>
+    // Utility: Returns a datetime-local string set one hour in the future (assumed CST)
+    function getDefaultScheduleTime() {
+      const now = new Date();
+      const cst = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      cst.setMinutes(cst.getMinutes() + 60);
+      return cst.getFullYear() + '-' +
+        String(cst.getMonth() + 1).padStart(2, '0') + '-' +
+        String(cst.getDate()).padStart(2, '0') + 'T' +
+        String(cst.getHours()).padStart(2, '0') + ':' +
+        String(cst.getMinutes()).padStart(2, '0');
+    }
+
+    // Update image preview when image URL is changed.
+    function updateImagePreview(input) {
+      const imageContainer = input.parentElement.parentElement;
+      const img = imageContainer.querySelector('img');
+      img.src = input.value.trim() ? input.value : 'https://placehold.co/600x400?text=Add%20Image%20to%20Preview';
+    }
+
+    /* --- Draft Auto-Save and Sync Functions --- */
+    let activeEditors = {};
+    let editingPosts = {}; // Track posts being edited
+
+    // Auto-save editor content every 10 seconds
+    function setupAutosave() {
+      setInterval(() => {
+        for (let editorId in activeEditors) {
+          saveDraft(editorId, false);
+        }
+        for (let editorId in editingPosts) {
+          saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+        }
+      }, 10000);
+    }
+
+    // Save draft to server
+    function saveDraft(editorId, showAlert = true) {
+      const editor = document.getElementById(editorId);
+      if (!editor) return;
+
+      const textarea = editor.querySelector('textarea');
+      const content = textarea.value.trim();
+
+      let image_url = "";
+      const imageContainer = editor.querySelector('.image-container');
+      if (imageContainer && imageContainer.style.display !== 'none') {
+        const imageInput = imageContainer.querySelector('input');
+        image_url = imageInput.value.trim();
+      }
+
+      const dateInput = editor.querySelector('input[type="datetime-local"]');
+      const scheduled_time = dateInput.value;
+
+      const isNewDraft = !activeEditors[editorId];
+      if (!isNewDraft && !content && !image_url) return;
+
+      const draftId = activeEditors[editorId];
+      const payload = { content, image_url, scheduled_time };
+
+      const method = draftId ? 'PUT' : 'POST';
+      const url = draftId ? `/drafts/${draftId}` : '/drafts/';
+
+      fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => { throw new Error(data.detail || 'Failed to save draft'); });
+          }
+          return response.json();
+        })
+        .then(data => {
+          if (!draftId) {
+            activeEditors[editorId] = data.id;
+          }
+          if (showAlert) {
+            alert('Draft saved successfully');
+          }
+        })
+        .catch(error => {
+          console.error('Draft save error:', error);
+          if (showAlert) {
+            alert('Failed to save draft: ' + error.message);
+          }
+        });
+    }
+
+    // Save scheduled post edit
+    function saveScheduledPostEdit(postId, editorId, showAlert = true) {
+      const editor = document.getElementById(editorId);
+      if (!editor) return;
+
+      const textarea = editor.querySelector('textarea');
+      const content = textarea.value.trim();
+
+      if (!content) {
+        if (showAlert) alert('Please add some content to your post');
+        return;
+      }
+
+      let image_url = "";
+      const imageContainer = editor.querySelector('.image-container');
+      if (imageContainer && imageContainer.style.display !== 'none') {
+        const imageInput = imageContainer.querySelector('input');
+        image_url = imageInput.value.trim();
+      }
+
+      const dateInput = editor.querySelector('input[type="datetime-local"]');
+      const scheduledTime = dateInput.value;
+      if (!scheduledTime) {
+        if (showAlert) alert('Please select a schedule time');
+        return;
+      }
+      const scheduleDate = new Date(scheduledTime);
+      if (scheduleDate <= new Date()) {
+        if (showAlert) alert('Please select a future date and time');
+        return;
+      }
+
+      const payload = {
+        content,
+        image_url,
+        scheduled_time: scheduleDate.toISOString()
+      };
+
+      fetch(`/posts/${postId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => { throw new Error(data.detail || 'Failed to update post'); });
+          }
+          return response.json();
+        })
+        .then(data => {
+          if (showAlert) {
+            alert('Post updated successfully');
+            document.getElementById(editorId).remove();
+            delete editingPosts[editorId];
+            updateScheduledPosts();
+          }
+        })
+        .catch(error => {
+          console.error('Update error:', error);
+          if (showAlert) {
+            alert('Failed to update post: ' + error.message);
+          }
+        });
+    }
+
+    // Load existing drafts from the server
+    function loadDrafts() {
+      fetch('/drafts/')
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Failed to load drafts');
+          }
+          return response.json();
+        })
+        .then(drafts => {
+          drafts.forEach(draft => {
+            createEditorFromDraft(draft);
+          });
+        })
+        .catch(error => console.error("Error loading drafts:", error));
+    }
+
+    // Create editor from a draft
+    function createEditorFromDraft(draft) {
+      const editorId = 'editor-' + Date.now();
+      const editorsDiv = document.getElementById('post-editors');
+
+      let scheduledTime = getDefaultScheduleTime();
+      if (draft.scheduled_time) {
+        try {
+          const dt = new Date(draft.scheduled_time);
+          scheduledTime = dt.getFullYear() + '-' +
+            String(dt.getMonth() + 1).padStart(2, '0') + '-' +
+            String(dt.getDate()).padStart(2, '0') + 'T' +
+            String(dt.getHours()).padStart(2, '0') + ':' +
+            String(dt.getMinutes()).padStart(2, '0');
+        } catch (e) {
+          console.error("Error parsing scheduled time:", e);
+        }
+      }
+
+      // Similar HTML as createNewPostEditor but with draft values and platform toggles
+      const editorHTML = `
+        <div id="${editorId}" class="post-editor bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <span class="font-bold text-base md:text-lg">Draft #${draft.id}</span>
+            <button onclick="removePostEditor('${editorId}')" class="text-red-500 hover:text-red-700 font-bold text-sm md:text-base">Remove</button>
+          </div>
+          <div class="space-y-3 flex-grow">
+            <div>
+              <label class="block text-sm font-bold mb-2">Schedule For</label>
+              <input type="datetime-local" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" value="${scheduledTime}">
+            </div>
+            <div>
+              <label class="block text-sm font-bold mb-2">Post Content</label>
+              <div class="flex gap-2 mb-2">
+                <textarea class="w-full p-2 md:p-4 h-20 md:h-24 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="What's happening?">${draft.content || ''}</textarea>
+                <button onclick="regenerateEditorPost('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                  <i class="fas fa-sync-alt"></i>
+                </button>
+              </div>
+            </div>
+            <div class="status-log text-xs md:text-sm text-gray-600" style="display:none;"></div>
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <label class="text-sm font-bold">Image</label>
+                <button onclick="toggleEditorImage('${editorId}')" class="text-xs md:text-sm text-post-accent hover:underline">Toggle Image</button>
+              </div>
+              <div class="image-container" style="${draft.image_url ? 'display: block;' : 'display: none;'}">
+                <img src="${draft.image_url || 'https://placehold.co/600x400?text=Add%20Image%20to%20Preview'}" alt="Post image" class="w-full h-36 md:h-48 object-cover neo-border-sm rounded-lg mb-3">
+                <div class="flex gap-2">
+                  <input type="text" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="Image URL" oninput="updateImagePreview(this)" value="${draft.image_url || ''}">
+                  <button onclick="regenerateEditorImage('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                    <i class="fas fa-sync-alt"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="platform-toggles flex gap-3 items-center mt-4 mb-2">
+            <span class="text-sm font-bold mr-2">Post to:</span>
+            <button onclick="togglePlatform(this, 'twitter', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Twitter/X">
+              <i class="fab fa-x-twitter text-xl md:text-2xl text-gray-400"></i>
+            </button>
+            <button onclick="togglePlatform(this, 'instagram', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Instagram">
+              <i class="fab fa-instagram text-xl md:text-2xl text-gray-400"></i>
+            </button>
+            <button onclick="togglePlatform(this, 'facebook', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Facebook">
+              <i class="fab fa-facebook text-xl md:text-2xl text-gray-400"></i>
+            </button>
+            <button onclick="togglePlatform(this, 'pinterest', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Pinterest">
+              <i class="fab fa-pinterest text-xl md:text-2xl text-gray-400"></i>
+            </button>
+          </div>
+          <div class="flex gap-3 mt-4">
+            <button onclick="schedulePost('${editorId}')" class="bg-green-500 text-white px-3 py-2 md:px-4 md:py-2 font-bold neo-border-sm rounded text-sm md:text-base">
+              Schedule Post
+            </button>
+          </div>
+        </div>
+      `;
+
+      editorsDiv.insertAdjacentHTML('beforeend', editorHTML);
+      activeEditors[editorId] = draft.id;
+
+      // Set platform states based on draft values
+      const editor = document.getElementById(editorId);
+      editor.querySelector('[onclick*="twitter"]').classList.toggle('active', draft.publish_to_twitter);
+      editor.querySelector('[onclick*="instagram"]').classList.toggle('active', draft.publish_to_instagram);
+      editor.querySelector('[onclick*="facebook"]').classList.toggle('active', draft.publish_to_facebook);
+      editor.querySelector('[onclick*="pinterest"]').classList.toggle('active', draft.publish_to_pinterest);
+
+      // Set initial icon colors if active
+      ['twitter', 'instagram', 'facebook', 'pinterest'].forEach(platform => {
+        const button = editor.querySelector(`[onclick*="${platform}"]`);
+        if (button.classList.contains('active')) {
+          togglePlatform(button, platform, editorId);
+        }
+      });
+
+      setupEditorListeners(editorId);
+    }
+
+    // Remove a post editor
+    function removePostEditor(editorId) {
+      if (editingPosts[editorId]) {
+        if (confirm('Are you sure you want to cancel editing this post? Any unsaved changes will be lost.')) {
+          delete editingPosts[editorId];
+          document.getElementById(editorId).remove();
+        }
+        return;
+      }
+      const draftId = activeEditors[editorId];
+      if (draftId) {
+        if (confirm('Do you want to delete this draft from the server as well?')) {
+          fetch(`/posts/${draftId}`, { method: 'DELETE' })
+            .then(response => {
+              if (!response.ok) {
+                return response.json().then(data => { throw new Error(data.detail || 'Failed to delete draft'); });
+              }
+              return response.json();
+            })
+            .then(() => {
+              delete activeEditors[editorId];
+              document.getElementById(editorId).remove();
+            })
+            .catch(error => {
+              alert('Failed to delete draft: ' + error.message);
+            });
+        } else {
+          delete activeEditors[editorId];
+          document.getElementById(editorId).remove();
+        }
+      } else {
+        document.getElementById(editorId).remove();
+      }
+    }
+
+    // Toggle platform button function
+    function togglePlatform(button, platform, editorId) {
+      // Toggle the active state visually with Tailwind classes
+      button.classList.toggle('bg-gray-100');
+      const icon = button.querySelector('i');
+
+      if (button.classList.contains('bg-gray-100')) {
+        switch (platform) {
+          case 'twitter':
+            icon.classList.replace('text-gray-400', 'text-blue-400');
+            break;
+          case 'instagram':
+            icon.classList.replace('text-gray-400', 'text-pink-500');
+            break;
+          case 'facebook':
+            icon.classList.replace('text-gray-400', 'text-blue-600');
+            break;
+          case 'pinterest':
+            icon.classList.replace('text-gray-400', 'text-red-600');
+            break;
+        }
+      } else {
+        icon.classList.remove('text-blue-400', 'text-pink-500', 'text-blue-600', 'text-red-600');
+        icon.classList.add('text-gray-400');
+      }
+
+      // Auto-save platform selection
+      if (editingPosts[editorId]) {
+        saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+      } else {
+        saveDraft(editorId, false);
+      }
+    }
+
+    // Create a new post editor with platform toggles
+    function createNewPostEditor() {
+      const editorsDiv = document.getElementById('post-editors');
+      const editorId = 'editor-' + Date.now();
+      const editorHTML = `
+        <div id="${editorId}" class="post-editor bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <span class="font-bold text-base md:text-lg">New Post Editor</span>
+            <button onclick="removePostEditor('${editorId}')" class="text-red-500 hover:text-red-700 font-bold text-sm md:text-base">Remove</button>
+          </div>
+          <div class="space-y-3 flex-grow">
+            <div>
+              <label class="block text-sm font-bold mb-2">Schedule For</label>
+              <input type="datetime-local" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" value="${getDefaultScheduleTime()}">
+            </div>
+            <div>
+              <label class="block text-sm font-bold mb-2">Post Content</label>
+              <div class="flex gap-2 mb-2">
+                <textarea class="w-full p-2 md:p-4 h-20 md:h-24 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="What's happening?"></textarea>
+                <button onclick="regenerateEditorPost('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                  <i class="fas fa-sync-alt"></i>
+                </button>
+              </div>
+            </div>
+            <div class="status-log text-xs md:text-sm text-gray-600" style="display:none;"></div>
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <label class="text-sm font-bold">Image</label>
+                <button onclick="toggleEditorImage('${editorId}')" class="text-xs md:text-sm text-post-accent hover:underline">Toggle Image</button>
+              </div>
+              <div class="image-container" style="display: none;">
+                <img src="https://placehold.co/600x400?text=Add%20Image%20to%20Preview" alt="Post image" class="w-full h-36 md:h-48 object-cover neo-border-sm rounded-lg mb-3">
+                <div class="flex gap-2">
+                  <input type="text" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="Image URL" oninput="updateImagePreview(this)">
+                  <button onclick="regenerateEditorImage('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                    <i class="fas fa-sync-alt"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="platform-toggles flex gap-3 items-center mt-4 mb-2">
+            <span class="text-sm font-bold mr-2">Post to:</span>
+            <button onclick="togglePlatform(this, 'twitter', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Twitter/X">
+              <i class="fab fa-x-twitter text-xl md:text-2xl text-gray-400"></i>
+            </button>
+            <button onclick="togglePlatform(this, 'instagram', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Instagram">
+              <i class="fab fa-instagram text-xl md:text-2xl text-gray-400"></i>
+            </button>
+            <button onclick="togglePlatform(this, 'facebook', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Facebook">
+              <i class="fab fa-facebook text-xl md:text-2xl text-gray-400"></i>
+            </button>
+            <button onclick="togglePlatform(this, 'pinterest', '${editorId}')" 
+              class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200" 
+              title="Pinterest">
+              <i class="fab fa-pinterest text-xl md:text-2xl text-gray-400"></i>
+            </button>
+          </div>
+          <div class="flex gap-3 mt-4">
+            <button onclick="schedulePost('${editorId}')" class="bg-green-500 text-white px-3 py-2 md:px-4 md:py-2 font-bold neo-border-sm rounded text-sm md:text-base">
+              Schedule Post
+            </button>
+          </div>
+        </div>
+      `;
+      editorsDiv.insertAdjacentHTML('beforeend', editorHTML);
+      activeEditors[editorId] = null;
+      setupEditorListeners(editorId);
+
+      setTimeout(() => {
+        saveDraft(editorId, false);
+      }, 500);
+    }
+
+    // Schedule post function with platform selections
+    function schedulePost(editorId) {
+      const editor = document.getElementById(editorId);
+      const textarea = editor.querySelector('textarea');
+      const datetimeInput = editor.querySelector('input[type="datetime-local"]');
+      const content = textarea.value.trim();
+      const scheduledTime = datetimeInput.value;
+
+      if (!content) {
+        alert('Please add some content to your post');
+        return;
+      }
+      if (!scheduledTime) {
+        alert('Please select a schedule time');
+        return;
+      }
+      const scheduleDate = new Date(scheduledTime);
+      if (scheduleDate <= new Date()) {
+        alert('Please select a future date and time');
+        return;
+      }
+      let image_url = "";
+      const imageContainer = editor.querySelector('.image-container');
+      if (imageContainer && imageContainer.style.display !== 'none') {
+        const imageInput = imageContainer.querySelector('input');
+        image_url = imageInput.value.trim();
+      }
+
+      // Get platform selections
+      const platforms = {
+        publish_to_twitter: editor.querySelector('[onclick*="twitter"]').classList.contains('active'),
+        publish_to_instagram: editor.querySelector('[onclick*="instagram"]').classList.contains('active'),
+        publish_to_facebook: editor.querySelector('[onclick*="facebook"]').classList.contains('active'),
+        publish_to_pinterest: editor.querySelector('[onclick*="pinterest"]').classList.contains('active')
+      };
+
+      const draftId = activeEditors[editorId];
+      const payload = {
+        content,
+        image_url,
+        scheduled_time: scheduledTime,
+        ...platforms
+      };
+
+      if (draftId) {
+        fetch(`/posts/${draftId}/schedule`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scheduled_time: scheduledTime, ...platforms })
+        })
+          .then(response => {
+            if (!response.ok) {
+              return response.json().then(data => { throw new Error(data.detail || 'Failed to schedule draft'); });
+            }
+            return response.json();
+          })
+          .then(data => {
+            alert(`Post scheduled successfully for ${scheduledTime}`);
+            delete activeEditors[editorId];
+            document.getElementById(editorId).remove();
+            updateScheduledPosts();
+          })
+          .catch(error => {
+            alert(error.message);
+          });
+      } else {
+        fetch('/posts/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+          .then(response => {
+            if (!response.ok) {
+              return response.json().then(data => { throw new Error(data.detail || 'Failed to schedule post'); });
+            }
+            return response.json();
+          })
+          .then(data => {
+            alert(`Post scheduled successfully for ${scheduledTime}`);
+            editor.remove();
+            updateScheduledPosts();
+          })
+          .catch(error => {
+            alert(error.message);
+          });
+      }
+    }
+
+    // Other existing functions remain as before
+
+    function regenerateEditorPost(editorId) {
+      const editor = document.getElementById(editorId);
+      const statusLog = editor.querySelector('.status-log');
+      statusLog.style.display = 'block';
+      statusLog.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting post generation...<br>';
+      const evtSource = new EventSource('/stream/generate/text');
+      evtSource.onmessage = function (event) {
+        const data = event.data;
+        statusLog.innerHTML += data + '<br>';
+        try {
+          const result = JSON.parse(data);
+          if (result.tweet_text) {
+            const textarea = editor.querySelector('textarea');
+            textarea.value = result.tweet_text;
+            if (editingPosts[editorId]) {
+              saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+            } else {
+              saveDraft(editorId, false);
+            }
+            evtSource.close();
+            statusLog.innerHTML += 'Post generation complete.<br>';
+            setTimeout(() => { statusLog.style.display = 'none'; }, 3000);
+          }
+        } catch (e) {}
+      };
+      evtSource.onerror = function (err) {
+        console.error("EventSource error:", err);
+        evtSource.close();
+        statusLog.innerHTML += 'Error during post generation.<br>';
+      };
+    }
+
+    function regenerateEditorImage(editorId) {
+      const editor = document.getElementById(editorId);
+      const statusLog = editor.querySelector('.status-log');
+      statusLog.style.display = 'block';
+      statusLog.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting image generation...<br>';
+      const postText = editor.querySelector('textarea').value;
+      const evtSource = new EventSource('/stream/generate/image?tweet_text=' + encodeURIComponent(postText));
+      evtSource.onmessage = function (event) {
+        const data = event.data;
+        statusLog.innerHTML += data + '<br>';
+        try {
+          const result = JSON.parse(data);
+          if (result.image_url) {
+            const imageContainer = editor.querySelector('.image-container');
+            const imageInput = imageContainer.querySelector('input');
+            const img = imageContainer.querySelector('img');
+            imageInput.value = result.image_url;
+            img.src = result.image_url;
+            imageContainer.style.display = 'block';
+            if (editingPosts[editorId]) {
+              saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+            } else {
+              saveDraft(editorId, false);
+            }
+            evtSource.close();
+            statusLog.innerHTML += 'Image generation complete.<br>';
+            setTimeout(() => { statusLog.style.display = 'none'; }, 3000);
+          }
+        } catch (e) {}
+      };
+      evtSource.onerror = function (err) {
+        console.error("EventSource error:", err);
+        evtSource.close();
+        statusLog.innerHTML += 'Error during image generation.<br>';
+      };
+    }
+
+    function toggleEditorImage(editorId) {
+      const editor = document.getElementById(editorId);
+      const imageContainer = editor.querySelector('.image-container');
+      imageContainer.style.display = (imageContainer.style.display === 'none' || imageContainer.style.display === '') ? 'block' : 'none';
+      if (editingPosts[editorId]) {
+        saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+      } else {
+        saveDraft(editorId, false);
+      }
+    }
+
+    function editPost(postId) {
+      const postCard = document.getElementById(`post-card-${postId}`);
+      if (postCard) {
+        postCard.style.display = 'none';
+      }
+      fetch(`/posts/${postId}`)
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => { throw new Error(data.detail || 'Failed to load post'); });
+          }
+          return response.json();
+        })
+        .then(post => {
+          const editorId = 'editor-' + Date.now();
+          const editorsDiv = document.getElementById('post-editors');
+          let scheduledTime = getDefaultScheduleTime();
+          if (post.scheduled_time) {
+            try {
+              const dt = new Date(post.scheduled_time);
+              scheduledTime = dt.getFullYear() + '-' +
+                String(dt.getMonth() + 1).padStart(2, '0') + '-' +
+                String(dt.getDate()).padStart(2, '0') + 'T' +
+                String(dt.getHours()).padStart(2, '0') + ':' +
+                String(dt.getMinutes()).padStart(2, '0');
+            } catch (e) {
+              console.error("Error parsing scheduled time:", e);
+            }
+          }
+          const editorHTML = `
+            <div id="${editorId}" class="post-editor bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
+              <div class="flex justify-between items-center mb-3">
+                <span class="font-bold text-base md:text-lg">Edit Scheduled Post #${post.id}</span>
+                <div>
+                  <span class="text-xs md:text-sm text-green-600 bg-green-100 px-2 py-1 rounded mr-2 autosave-status">Autosaving Enabled</span>
+                  <button onclick="removePostEditor('${editorId}')" class="text-red-500 hover:text-red-700 font-bold text-sm md:text-base">Cancel Edit</button>
+                </div>
+              </div>
+              <div class="space-y-3 flex-grow">
+                <div>
+                  <label class="block text-sm font-bold mb-2">Schedule For</label>
+                  <input type="datetime-local" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" value="${scheduledTime}">
+                </div>
+                <div>
+                  <label class="block text-sm font-bold mb-2">Post Content</label>
+                  <div class="flex gap-2 mb-2">
+                    <textarea class="w-full p-2 md:p-4 h-20 md:h-24 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="What's happening?">${post.content || ''}</textarea>
+                    <button onclick="regenerateEditorPost('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                      <i class="fas fa-sync-alt"></i>
+                    </button>
+                  </div>
+                </div>
+                <div class="status-log text-xs md:text-sm text-gray-600" style="display:none;"></div>
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between">
+                    <label class="text-sm font-bold">Image</label>
+                    <button onclick="toggleEditorImage('${editorId}')" class="text-xs md:text-sm text-post-accent hover:underline">Toggle Image</button>
+                  </div>
+                  <div class="image-container" style="${post.image_url ? 'display: block;' : 'display: none;'}">
+                    <img src="${post.image_url || 'https://placehold.co/600x400?text=Add%20Image%20to%20Preview'}" alt="Post image" class="w-full h-36 md:h-48 object-cover neo-border-sm rounded-lg mb-3">
+                    <div class="flex gap-2">
+                      <input type="text" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="Image URL" oninput="updateImagePreview(this)" value="${post.image_url || ''}">
+                      <button onclick="regenerateEditorImage('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                        <i class="fas fa-sync-alt"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="flex gap-3 mt-4">
+                <button onclick="finishEditing('${editorId}')" class="bg-green-500 text-white px-3 py-2 md:px-4 md:py-2 font-bold neo-border-sm rounded text-sm md:text-base">
+                  Done
+                </button>
+              </div>
+            </div>
+          `;
+          editorsDiv.insertAdjacentHTML('beforeend', editorHTML);
+          editingPosts[editorId] = post.id;
+          setupEditorListeners(editorId);
+          document.getElementById(editorId).scrollIntoView({ behavior: 'smooth' });
+        })
+        .catch(error => {
+          alert('Failed to load post for editing: ' + error.message);
+        });
+    }
+
+    function finishEditing(editorId) {
+      if (editingPosts[editorId]) {
+        const postId = editingPosts[editorId];
+        saveScheduledPostEdit(postId, editorId, true);
+        const postCard = document.getElementById(`post-card-${postId}`);
+        if (postCard) {
+          postCard.style.display = 'block';
+        } else {
+          updateScheduledPosts();
+        }
+      }
+    }
+
+    function renderPostCard(post) {
+      const scheduled = post.scheduled_time ? new Date(post.scheduled_time) : null;
+      const now = new Date();
+      let status;
+      if (post.is_draft) {
+        status = { status: "Draft", class: "bg-purple-300 text-purple-800" };
+      } else if (post.is_canceled) {
+        status = { status: "Canceled", class: "bg-red-300 text-red-800" };
+      } else if (post.is_published) {
+        status = { status: "Posted", class: "bg-gray-300 text-gray-800" };
+      } else if (scheduled && scheduled <= now) {
+        status = { status: "Pending", class: "bg-blue-300 text-blue-800" };
+      } else {
+        status = { status: "Scheduled", class: "bg-green-300 text-green-800" };
+      }
+      const scheduledTime = post.scheduled_time ? new Date(post.scheduled_time).toLocaleString() : '';
+      return `
+        <div id="post-card-${post.id}" class="post-card bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
+          <div class="flex justify-between items-center mb-3">
+            <span class="font-bold text-base md:text-lg">Post #${post.id}</span>
+            <span class="status-badge px-2 py-1 rounded text-xs md:text-sm ${status.class}">${status.status}</span>
+          </div>
+          <div class="mb-3">
+            ${scheduledTime ? `<p class="text-xs md:text-sm text-gray-600 mb-2">Scheduled: ${scheduledTime}</p>` : ''}
+            <p class="mb-2 text-sm md:text-base">${post.content}</p>
+          </div>
+          ${post.image_url ? `<div class="mb-3 flex-grow"><img src="${post.image_url}" alt="Post image" class="w-full h-32 md:h-40 object-cover neo-border-sm rounded-lg"></div>` : '<div class="flex-grow"></div>'}
+          <div class="flex flex-wrap gap-2 mt-auto">
+            ${(!post.is_published) ? `<button onclick="editPost(${post.id})" class="bg-green-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Edit</button>` : ''}
+            ${(!post.is_published && status.status === "Pending") ? `<button onclick="publishPost(${post.id})" class="bg-blue-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Publish</button>` : ''}
+            ${(!post.is_canceled && !post.is_published) ? `<button onclick="cancelPost(${post.id})" class="bg-yellow-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Cancel</button>` : ''}
+            ${(post.is_canceled && !post.is_published) ? `<button onclick="uncancelPost(${post.id})" class="bg-purple-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Uncancel</button>` : ''}
+            <button onclick="deletePost(${post.id})" class="text-red-500 hover:text-red-700 font-bold text-xs md:text-sm">Delete</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function updateScheduledPosts() {
+      fetch('/posts/?include_published=true')
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Failed to load scheduled posts');
+          }
+          return response.json();
+        })
+        .then(data => {
+          const container = document.getElementById('posts-container');
+          container.innerHTML = '';
+          data.forEach(post => {
+            container.insertAdjacentHTML('beforeend', renderPostCard(post));
+          });
+        })
+        .catch(error => console.error("Error fetching posts:", error));
+    }
+
+    function publishPost(postId) {
+      fetch(`/posts/${postId}/publish`, { method: 'POST' })
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => { throw new Error(data.detail || 'Failed to publish post'); });
+          }
+          return response.json();
+        })
+        .then(data => {
+          alert("Post published successfully");
+          updateScheduledPosts();
+        })
+        .catch(error => {
+          alert(error.message);
+        });
+    }
+
+    function cancelPost(postId) {
+      fetch(`/posts/${postId}/cancel`, { method: 'POST' })
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => { throw new Error(data.detail || 'Failed to cancel post'); });
+          }
+          return response.json();
+        })
+        .then(data => {
+          alert("Post canceled successfully");
+          updateScheduledPosts();
+        })
+        .catch(error => {
+          alert(error.message);
+        });
+    }
+
+    function uncancelPost(postId) {
+      fetch(`/posts/${postId}/cancel`, { method: 'DELETE' })
+        .then(response => {
+          if (!response.ok) {
+            return response.json().then(data => { throw new Error(data.detail || 'Failed to uncancel post'); });
+          }
+          return response.json();
+        })
+        .then(data => {
+          alert("Post unscheduled successfully");
+          updateScheduledPosts();
+        })
+        .catch(error => {
+          alert(error.message);
+        });
+    }
+
+    function deletePost(postId) {
+      if (confirm('Are you sure you want to delete this post?')) {
+        fetch(`/posts/${postId}`, { method: 'DELETE' })
+          .then(response => {
+            if (!response.ok) {
+              return response.json().then(data => { throw new Error(data.detail || 'Failed to delete post'); });
+            }
+            return response.json();
+          })
+          .then(() => {
+            updateScheduledPosts();
+          })
+          .catch(error => {
+            alert(error.message);
+          });
+      }
+    }
+
+    function setupEditorListeners(editorId) {
+      const editor = document.getElementById(editorId);
+      if (!editor) return;
+
+      function showAutosaveStatus(message = "Saving...", isSuccess = true) {
+        const statusElement = editor.querySelector('.autosave-status');
+        if (statusElement) {
+          statusElement.textContent = message;
+          statusElement.className = isSuccess
+            ? 'text-xs md:text-sm text-green-600 bg-green-100 px-2 py-1 rounded mr-2 autosave-status'
+            : 'text-xs md:text-sm text-red-600 bg-red-100 px-2 py-1 rounded mr-2 autosave-status';
+
+          setTimeout(() => {
+            statusElement.textContent = "Ready";
+            statusElement.className = 'text-xs md:text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded mr-2 autosave-status';
+          }, 2000);
+        }
+      }
+
+      const textarea = editor.querySelector('textarea');
+      textarea.addEventListener('input', function () {
+        showAutosaveStatus();
+        if (textarea.saveTimeout) clearTimeout(textarea.saveTimeout);
+        textarea.saveTimeout = setTimeout(() => {
+          if (editingPosts[editorId]) {
+            saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+          } else {
+            saveDraft(editorId, false);
+          }
+          showAutosaveStatus("Saved!");
+        }, 1000);
+      });
+
+      const imageInput = editor.querySelector('.image-container input');
+      if (imageInput) {
+        imageInput.addEventListener('input', function () {
+          showAutosaveStatus();
+          if (imageInput.saveTimeout) clearTimeout(imageInput.saveTimeout);
+          imageInput.saveTimeout = setTimeout(() => {
+            if (editingPosts[editorId]) {
+              saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+            } else {
+              saveDraft(editorId, false);
+            }
+            showAutosaveStatus("Saved!");
+          }, 1000);
+        });
+      }
+
+      const dateInput = editor.querySelector('input[type="datetime-local"]');
+      dateInput.addEventListener('change', function () {
+        showAutosaveStatus();
+        if (editingPosts[editorId]) {
+          saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+        } else {
+          saveDraft(editorId, false);
+        }
+        showAutosaveStatus("Saved!");
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      loadDrafts();
+      setupAutosave();
+      updateScheduledPosts();
+    });
+
+    setInterval(updateScheduledPosts, 5000);
+  </script>
+</body>
+
+</html>

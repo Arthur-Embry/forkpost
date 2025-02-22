@@ -1,0 +1,16 @@
+anthropic
+google-search-results
+pillow
+httpx
+requests
+requests-oauthlib
+python-dateutil
+typing-extensions
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+sqlalchemy
+apscheduler
+python-dotenv
+jinja2

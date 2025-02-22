@@ -1,0 +1,13 @@
+# Environment files
+.env*
+!.env.sample
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Database
+recipe_tweets.db
+
+# Non defailt templating files
+guidance.py
