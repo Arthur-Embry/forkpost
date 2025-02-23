@@ -40,7 +40,8 @@ class TweetImageEvaluator:
                     twitter_post_id TEXT,
                     instagram_post_id TEXT,
                     facebook_post_id TEXT,
-                    pinterest_post_id TEXT)''')
+                    pinterest_post_id TEXT,
+                    platform_errors TEXT)''')
         conn.commit()
         conn.close()
 

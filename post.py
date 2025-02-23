@@ -4,6 +4,10 @@ import os
 import json
 import time
 import asyncio
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # API Credentials
 # Twitter/X
@@ -446,16 +450,19 @@ class SocialMediaPoster:
 
     async def post_to_platforms(self, content, image_url, platforms):
         results = {}
+        platform_errors = {}
         
-        # Ensure platforms is a dict with boolean values
-        platforms = {
-            'twitter': bool(platforms.get('publish_to_twitter', False)),
-            'instagram': bool(platforms.get('publish_to_instagram', False)),
-            'facebook': bool(platforms.get('publish_to_facebook', False)),
-            'pinterest': bool(platforms.get('publish_to_pinterest', False))
-        }
+        async def parse_api_error(e, platform):
+            if hasattr(e, 'response') and hasattr(e.response, 'text'):
+                try:
+                    error_data = json.loads(e.response.text)
+                    if 'error' in error_data:
+                        return error_data['error'].get('message') or error_data['error'].get('error_user_msg')
+                except:
+                    pass
+            return str(e)
 
-        if platforms['twitter']:
+        if platforms['publish_to_twitter']:
             try:
                 result = await asyncio.to_thread(
                     self.twitter_poster.post_image_from_url, 
@@ -466,8 +473,9 @@ class SocialMediaPoster:
             except Exception as e:
                 print(f"Twitter posting error: {e}")
                 results['twitter_post_id'] = None
+                platform_errors['twitter'] = await parse_api_error(e, 'twitter')
 
-        if platforms['instagram']:
+        if platforms['publish_to_instagram']:
             try:
                 result = await asyncio.to_thread(
                     self.instagram_poster.post_image_from_url, 
@@ -478,8 +486,9 @@ class SocialMediaPoster:
             except Exception as e:
                 print(f"Instagram posting error: {e}")
                 results['instagram_post_id'] = None
+                platform_errors['instagram'] = await parse_api_error(e, 'instagram')
 
-        if platforms['facebook']:
+        if platforms['publish_to_facebook']:
             try:
                 result = await asyncio.to_thread(
                     self.facebook_poster.post_image_from_url, 
@@ -490,8 +499,9 @@ class SocialMediaPoster:
             except Exception as e:
                 print(f"Facebook posting error: {e}")
                 results['facebook_post_id'] = None
+                platform_errors['facebook'] = await parse_api_error(e, 'facebook')
 
-        if platforms['pinterest']:
+        if platforms['publish_to_pinterest']:
             try:
                 result = await asyncio.to_thread(
                     self.pinterest_poster.post_image_from_url, 
@@ -503,5 +513,7 @@ class SocialMediaPoster:
             except Exception as e:
                 print(f"Pinterest posting error: {e}")
                 results['pinterest_post_id'] = None
+                platform_errors['pinterest'] = await parse_api_error(e, 'pinterest')
 
+        results['platform_errors'] = platform_errors
         return results

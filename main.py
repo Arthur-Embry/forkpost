@@ -75,6 +75,7 @@ class PostResponse(PostBase):
     instagram_post_id: Optional[str] = None
     facebook_post_id: Optional[str] = None
     pinterest_post_id: Optional[str] = None
+    platform_errors: Optional[str] = None  # Add this line
 
 class PostCreate(PostBase):
     pass
@@ -109,7 +110,8 @@ def init_db():
                  twitter_post_id TEXT,
                  instagram_post_id TEXT,
                  facebook_post_id TEXT,
-                 pinterest_post_id TEXT)''')
+                 pinterest_post_id TEXT,
+                 platform_errors TEXT)''')
     conn.commit()
     conn.close()
 
@@ -245,10 +247,24 @@ def get_scheduled_posts(skip: int = 0, limit: int = 100, include_published: bool
     try:
         if include_published:
             # All non-draft posts
-            cursor.execute('SELECT * FROM posts WHERE is_draft = 0 ORDER BY scheduled_time LIMIT ? OFFSET ?', (limit, skip))
+            cursor.execute('''
+                SELECT *, platform_errors 
+                FROM posts 
+                WHERE is_draft = 0 
+                ORDER BY scheduled_time 
+                LIMIT ? OFFSET ?
+            ''', (limit, skip))
         else:
             # Only non-draft, non-published, non-canceled posts
-            cursor.execute('SELECT * FROM posts WHERE is_published = 0 AND is_canceled = 0 AND is_draft = 0 ORDER BY scheduled_time LIMIT ? OFFSET ?', (limit, skip))
+            cursor.execute('''
+                SELECT *, platform_errors 
+                FROM posts 
+                WHERE is_published = 0 
+                AND is_canceled = 0 
+                AND is_draft = 0 
+                ORDER BY scheduled_time 
+                LIMIT ? OFFSET ?
+            ''', (limit, skip))
         
         posts = [dict(row) for row in cursor.fetchall()]
         for post in posts:
@@ -260,6 +276,9 @@ def get_scheduled_posts(skip: int = 0, limit: int = 100, include_published: bool
         return posts
     finally:
         conn.close()
+
+
+
 
 @app.get("/posts/{post_id}", response_model=PostResponse)
 async def get_post(post_id: int):
@@ -280,6 +299,7 @@ async def get_post(post_id: int):
     finally:
         conn.close()
 
+        
 @app.put("/posts/{post_id}", response_model=PostResponse)
 async def update_post(post_id: int, post: PostCreate):
     conn = get_db()
@@ -292,7 +312,10 @@ async def update_post(post_id: int, post: PostCreate):
             
         scheduled_time = None
         if post.scheduled_time:
-            scheduled_time = post.scheduled_time.replace(tzinfo=ZoneInfo("America/Chicago")).isoformat()
+            # Convert incoming UTC time to CST
+            utc_time = post.scheduled_time.replace(tzinfo=timezone.utc)
+            scheduled_cst = utc_time.astimezone(ZoneInfo("America/Chicago"))
+            scheduled_time = scheduled_cst.isoformat()
             
         cursor.execute('''
             UPDATE posts 
@@ -340,22 +363,6 @@ async def publish_post(post_id: int):
             raise HTTPException(status_code=404, detail="Post not found")
         post = dict(post)
         
-        if post['is_published']:
-            raise HTTPException(status_code=400, detail="Post is already published")
-            
-        # For drafts being directly published
-        if post['is_draft']:
-            cursor.execute('UPDATE posts SET is_draft = 0 WHERE id = ?', (post_id,))
-            conn.commit()
-            
-        # For scheduled posts, verify time
-        elif post["scheduled_time"]:
-            now_cst = datetime.now(ZoneInfo("America/Chicago"))
-            scheduled_cst = datetime.fromisoformat(post["scheduled_time"]).replace(tzinfo=ZoneInfo("America/Chicago"))
-            if scheduled_cst > now_cst:
-                raise HTTPException(status_code=400, detail="Post is scheduled for future publication")
-                
-        # Post to selected platforms
         platforms = {
             'twitter': post['publish_to_twitter'],
             'instagram': post['publish_to_instagram'],
@@ -363,13 +370,38 @@ async def publish_post(post_id: int):
             'pinterest': post['publish_to_pinterest']
         }
         
-        post_results = await social_media_poster.post_to_platforms(
-            post['content'], 
-            post['image_url'],
-            platforms
-        )
+        platform_errors = {}
         
-        # Update post with platform-specific post IDs
+        try:
+            post_results = await social_media_poster.post_to_platforms(
+                post['content'], 
+                post['image_url'],
+                platforms
+            )
+            
+            # If post_results contains error messages, store them
+            if hasattr(post_results, 'errors'):
+                platform_errors = post_results.errors
+            elif isinstance(post_results, dict):
+                # Check each platform for missing IDs and store error messages
+                for platform in ['instagram', 'twitter', 'facebook', 'pinterest']:
+                    if platforms.get(platform) and not post_results.get(f'{platform}_post_id'):
+                        response_text = getattr(post_results, f'{platform}_response', None)
+                        if response_text:
+                            try:
+                                error_data = json.loads(response_text)
+                                if 'error' in error_data:
+                                    platform_errors[platform] = error_data['error'].get('message') or error_data['error'].get('error_user_msg')
+                            except:
+                                platform_errors[platform] = f"Failed to post to {platform}"
+                
+        except Exception as e:
+            error_msg = str(e)
+            platform_errors = {
+                platform: error_msg for platform in platforms if platforms[platform]
+            }
+
+        # Update post with results and errors
         cursor.execute('''
             UPDATE posts 
             SET is_published = 1, 
@@ -377,21 +409,28 @@ async def publish_post(post_id: int):
                 twitter_post_id = ?,
                 instagram_post_id = ?,
                 facebook_post_id = ?,
-                pinterest_post_id = ?
+                pinterest_post_id = ?,
+                platform_errors = ?
             WHERE id = ?
         ''', (
             post_results.get('twitter_post_id'),
             post_results.get('instagram_post_id'),
             post_results.get('facebook_post_id'),
             post_results.get('pinterest_post_id'),
+            json.dumps(platform_errors),
             post_id
         ))
         conn.commit()
         
-        return {"message": "Post published successfully", "post": post, "platform_results": post_results}
+        return {
+            "message": "Post publishing completed",
+            "post": post,
+            "platform_results": post_results,
+            "platform_errors": platform_errors
+        }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to publish post: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
@@ -688,7 +727,6 @@ async def publish_due_tweets():
     social_media_poster = SocialMediaPoster()
     
     try:
-        # Get all unpublished, uncanceled tweets that are due
         cursor.execute('''
             SELECT id, content, image_url, 
                    publish_to_twitter, publish_to_instagram,
@@ -701,27 +739,37 @@ async def publish_due_tweets():
         ''', (now_cst.isoformat(),))
         
         due_posts = cursor.fetchall()
+        print(f"\nFound {len(due_posts)} due posts")
         
         for post in due_posts:
+            post_id = post[0]
+            content = post[1]
+            image_url = post[2]
+            
+            print(f"\nProcessing post {post_id}")
+            print(f"Raw post data: {post}")
+            
+            platforms = {
+                'publish_to_twitter': bool(post[3]),
+                'publish_to_instagram': bool(post[4]),
+                'publish_to_facebook': bool(post[5]),
+                'publish_to_pinterest': bool(post[6])
+            }
+            
+            print(f"Platform flags from database: {platforms}")
+            
             try:
-                post_id = post[0]
-                content = post[1]
-                image_url = post[2]
-                
-                platforms = {
-                    'twitter': post[3],
-                    'instagram': post[4],
-                    'facebook': post[5],
-                    'pinterest': post[6]
-                }
-                
                 post_results = await social_media_poster.post_to_platforms(
                     content,
                     image_url,
                     platforms
                 )
                 
-                # Update post with platform-specific post IDs
+                print(f"Post results: {post_results}")
+                
+                # Extract platform errors if any
+                platform_errors = post_results.get('platform_errors', {})
+                
                 cursor.execute('''
                     UPDATE posts 
                     SET is_published = 1,
@@ -729,13 +777,15 @@ async def publish_due_tweets():
                         twitter_post_id = ?,
                         instagram_post_id = ?,
                         facebook_post_id = ?,
-                        pinterest_post_id = ?
+                        pinterest_post_id = ?,
+                        platform_errors = ?
                     WHERE id = ?
                 ''', (
                     post_results.get('twitter_post_id'),
                     post_results.get('instagram_post_id'),
                     post_results.get('facebook_post_id'),
                     post_results.get('pinterest_post_id'),
+                    json.dumps(platform_errors) if platform_errors else None,
                     post_id
                 ))
                 conn.commit()
@@ -744,11 +794,22 @@ async def publish_due_tweets():
                 
             except Exception as e:
                 print(f"Error publishing post {post_id}: {str(e)}")
+                # Update post with error status
+                cursor.execute('''
+                    UPDATE posts 
+                    SET is_published = 1,
+                        updated_at = CURRENT_TIMESTAMP,
+                        platform_errors = ?
+                    WHERE id = ?
+                ''', (
+                    json.dumps({"general": str(e)}),
+                    post_id
+                ))
+                conn.commit()
                 continue
                 
     finally:
         conn.close()
-
 
 if __name__ == "__main__":
     import uvicorn

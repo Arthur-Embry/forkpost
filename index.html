@@ -902,32 +902,34 @@
       }
     }
 
+
     function renderPostCard(post) {
       const scheduled = post.scheduled_time ? new Date(post.scheduled_time) : null;
       const now = new Date();
       const cstNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      
       let status;
       if (post.is_draft) {
-          status = { status: "Draft", class: "bg-purple-300 text-purple-800" };
+        status = { status: "Draft", class: "bg-purple-300 text-purple-800" };
       } else if (post.is_canceled) {
-          status = { status: "Canceled", class: "bg-red-300 text-red-800" };
+        status = { status: "Canceled", class: "bg-red-300 text-red-800" };
       } else if (post.is_published) {
-          status = { status: "Posted", class: "bg-gray-300 text-gray-800" };
+        status = { status: "Posted", class: "bg-gray-300 text-gray-800" };
       } else if (scheduled && scheduled <= cstNow) {
-          status = { status: "Pending", class: "bg-blue-300 text-blue-800" };
+        status = { status: "Pending", class: "bg-blue-300 text-blue-800" };
       } else {
-          status = { status: "Scheduled", class: "bg-green-300 text-green-800" };
+        status = { status: "Scheduled", class: "bg-green-300 text-green-800" };
       }
       
       // Format the time in CST
       const scheduledTime = post.scheduled_time ? 
-          new Date(post.scheduled_time).toLocaleString("en-US", { 
-              timeZone: "America/Chicago",
-              dateStyle: "short",
-              timeStyle: "short"
-          }) : '';
+        new Date(post.scheduled_time).toLocaleString("en-US", { 
+          timeZone: "America/Chicago",
+          dateStyle: "short",
+          timeStyle: "short"
+        }) : '';
 
-      // Platform icons
+      // Platform icons with active state indicators
       const platformIcons = `
         <div class="flex gap-1 items-center ml-2 border-l border-gray-400 pl-2">
           ${post.publish_to_twitter ? '<i class="fab fa-x-twitter"></i>' : ''}
@@ -936,6 +938,61 @@
           ${post.publish_to_pinterest ? '<i class="fab fa-pinterest"></i>' : ''}
         </div>
       `;
+
+      // Publishing status for published posts
+      let publishingStatus = '';
+      if (post.is_published) {
+        const platforms = {
+          twitter: { id: post.twitter_post_id, publish: post.publish_to_twitter },
+          instagram: { id: post.instagram_post_id, publish: post.publish_to_instagram },
+          facebook: { id: post.facebook_post_id, publish: post.publish_to_facebook },
+          pinterest: { id: post.pinterest_post_id, publish: post.publish_to_pinterest }
+        };
+         // Add debug logging
+          console.log('Post data:', post);
+          console.log('Platform errors raw:', post.platform_errors);
+        // Parse stored platform errors if they exist
+        let platformErrors = {};
+        try {
+          if (post.platform_errors) {
+            platformErrors = JSON.parse(post.platform_errors);
+          }
+        } catch (e) {
+          console.error('Error parsing platform errors:', e);
+        }
+        
+        publishingStatus = `
+          <div class="mt-2 text-xs space-y-1 border-t border-gray-200 pt-2">
+            ${Object.entries(platforms).map(([platform, data]) => {
+              if (!data.publish) return '';
+              
+              const errorMsg = platformErrors[platform];
+              const icon = platform === 'twitter' ? 'x-twitter' : platform;
+              
+              if (data.id) {
+                return `
+                  <div class="flex items-center gap-1">
+                    <i class="fab fa-${icon} w-4"></i>
+                    <span class="text-green-600">✓ Published successfully</span>
+                  </div>`;
+              } else {
+                return `
+                  <div class="flex items-start gap-1">
+                    <i class="fab fa-${icon} w-4 mt-1"></i>
+                    <div class="flex-1">
+                      <span class="text-red-600">✗ Publishing failed</span>
+                      ${errorMsg ? `
+                        <div class="text-gray-600 mt-1 break-words">
+                          Error: ${errorMsg}
+                        </div>
+                      ` : ''}
+                    </div>
+                  </div>`;
+              }
+            }).join('')}
+          </div>
+        `;
+      }
 
       return `
         <div id="post-card-${post.id}" class="post-card bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
@@ -950,18 +1007,32 @@
             ${scheduledTime ? `<p class="text-xs md:text-sm text-gray-600 mb-2">Scheduled: ${scheduledTime}</p>` : ''}
             <p class="mb-2 text-sm md:text-base">${post.content}</p>
           </div>
-          ${post.image_url ? `<div class="mb-3 flex-grow"><img src="${post.image_url}" alt="Post image" class="w-full h-32 md:h-40 object-cover neo-border-sm rounded-lg"></div>` : '<div class="flex-grow"></div>'}
-          <div class="flex flex-wrap gap-2 mt-auto">
-            ${(!post.is_published) ? `<button onclick="editPost(${post.id})" class="bg-green-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Edit</button>` : ''}
-            ${(!post.is_published && status.status === "Pending") ? `<button onclick="publishPost(${post.id})" class="bg-blue-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Publish</button>` : ''}
-            ${(!post.is_canceled && !post.is_published) ? `<button onclick="cancelPost(${post.id})" class="bg-yellow-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Cancel</button>` : ''}
-            ${(post.is_canceled && !post.is_published) ? `<button onclick="uncancelPost(${post.id})" class="bg-purple-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Uncancel</button>` : ''}
+          ${post.image_url ? 
+            `<div class="mb-3 flex-grow">
+              <img src="${post.image_url}" alt="Post image" class="w-full h-32 md:h-40 object-cover neo-border-sm rounded-lg">
+            </div>` : 
+            '<div class="flex-grow"></div>'
+          }
+          ${publishingStatus}
+          <div class="flex flex-wrap gap-2 mt-auto pt-3">
+            ${(!post.is_published) ? 
+              `<button onclick="editPost(${post.id})" class="bg-green-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Edit</button>` : ''
+            }
+            ${(!post.is_published && status.status === "Pending") ? 
+              `<button onclick="publishPost(${post.id})" class="bg-blue-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Publish</button>` : ''
+            }
+            ${(!post.is_canceled && !post.is_published) ? 
+              `<button onclick="cancelPost(${post.id})" class="bg-yellow-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Cancel</button>` : ''
+            }
+            ${(post.is_canceled && !post.is_published) ? 
+              `<button onclick="uncancelPost(${post.id})" class="bg-purple-500 text-white px-2 py-1 md:px-3 md:py-2 font-bold neo-border-sm rounded text-xs md:text-sm">Uncancel</button>` : ''
+            }
             <button onclick="deletePost(${post.id})" class="text-red-500 hover:text-red-700 font-bold text-xs md:text-sm">Delete</button>
           </div>
         </div>
       `;
     }
-
+    
     function updateScheduledPosts() {
       fetch('/posts/?include_published=true')
         .then(response => {
@@ -989,7 +1060,21 @@
           return response.json();
         })
         .then(data => {
-          alert("Post published successfully");
+          let statusMessage = "";
+          
+          // Generate status message from publishing results
+          if (data.publishing_status) {
+            for (const [platform, status] of Object.entries(data.publishing_status)) {
+              if (status.success) {
+                statusMessage += `✓ ${platform}: Successfully published\n`;
+              } else {
+                statusMessage += `✗ ${platform}: ${status.error}\n`;
+              }
+            }
+            alert(`Publishing completed:\n${statusMessage}`);
+          } else {
+            alert("Post published successfully");
+          }
           updateScheduledPosts();
         })
         .catch(error => {
