@@ -82,14 +82,18 @@
   <script>
     // Utility: Returns a datetime-local string set one hour in the future (assumed CST)
     function getDefaultScheduleTime() {
-      const now = new Date();
-      const cst = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
-      cst.setMinutes(cst.getMinutes() + 60);
-      return cst.getFullYear() + '-' +
-        String(cst.getMonth() + 1).padStart(2, '0') + '-' +
-        String(cst.getDate()).padStart(2, '0') + 'T' +
-        String(cst.getHours()).padStart(2, '0') + ':' +
-        String(cst.getMinutes()).padStart(2, '0');
+        // Get current time in CST
+        const now = new Date();
+        const cst = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+        // Add one hour
+        cst.setHours(cst.getHours() + 1);
+        
+        // Format for datetime-local input (YYYY-MM-DDTHH:MM)
+        return cst.getFullYear() + '-' +
+            String(cst.getMonth() + 1).padStart(2, '0') + '-' +
+            String(cst.getDate()).padStart(2, '0') + 'T' +
+            String(cst.getHours()).padStart(2, '0') + ':' +
+            String(cst.getMinutes()).padStart(2, '0');
     }
 
     // Update image preview when image URL is changed.
@@ -105,150 +109,209 @@
 
     // Auto-save editor content every 10 seconds
     function setupAutosave() {
-      setInterval(() => {
-        for (let editorId in activeEditors) {
-          saveDraft(editorId, false);
-        }
-        for (let editorId in editingPosts) {
-          saveScheduledPostEdit(editingPosts[editorId], editorId, false);
-        }
-      }, 10000);
+        setInterval(() => {
+            for (let editorId in activeEditors) {
+                const editor = document.getElementById(editorId);
+                if (editor) {
+                    saveDraft(editorId, false, true);
+                } else {
+                    delete activeEditors[editorId];
+                }
+            }
+            for (let editorId in editingPosts) {
+                const editor = document.getElementById(editorId);
+                if (editor) {
+                    saveScheduledPostEdit(editingPosts[editorId], editorId, false);
+                } else {
+                    delete editingPosts[editorId];
+                }
+            }
+        }, 10000);
     }
-
+    
     // Save draft to server
-    function saveDraft(editorId, showAlert = true) {
-      const editor = document.getElementById(editorId);
-      if (!editor) return;
+    function saveDraft(editorId, showAlert = true, forceSave = false) {
+        const editor = document.getElementById(editorId);
+        if (!editor) return;
 
-      const textarea = editor.querySelector('textarea');
-      const content = textarea.value.trim();
+        const textarea = editor.querySelector('textarea');
+        const content = textarea.value.trim();
 
-      let image_url = "";
-      const imageContainer = editor.querySelector('.image-container');
-      if (imageContainer && imageContainer.style.display !== 'none') {
-        const imageInput = imageContainer.querySelector('input');
-        image_url = imageInput.value.trim();
-      }
+        let image_url = "";
+        const imageContainer = editor.querySelector('.image-container');
+        if (imageContainer && imageContainer.style.display !== 'none') {
+            const imageInput = imageContainer.querySelector('input');
+            image_url = imageInput.value.trim();
+        }
 
-      const dateInput = editor.querySelector('input[type="datetime-local"]');
-      const scheduled_time = dateInput.value;
+        const dateInput = editor.querySelector('input[type="datetime-local"]');
+        const scheduled_time = dateInput.value;
 
-      const isNewDraft = !activeEditors[editorId];
-      if (!isNewDraft && !content && !image_url) return;
+        // Get platform selections
+        const platforms = {
+            publish_to_twitter: editor.querySelector('[onclick*="twitter"]').classList.contains('active'),
+            publish_to_instagram: editor.querySelector('[onclick*="instagram"]').classList.contains('active'),
+            publish_to_facebook: editor.querySelector('[onclick*="facebook"]').classList.contains('active'),
+            publish_to_pinterest: editor.querySelector('[onclick*="pinterest"]').classList.contains('active')
+        };
 
-      const draftId = activeEditors[editorId];
-      const payload = { content, image_url, scheduled_time };
+        const isNewDraft = !activeEditors[editorId];
+        // Only skip save if not forcing and there's no content
+        if (!forceSave && !isNewDraft && !content && !image_url) return;
 
-      const method = draftId ? 'PUT' : 'POST';
-      const url = draftId ? `/drafts/${draftId}` : '/drafts/';
+        const draftId = activeEditors[editorId];
+        const payload = { 
+            content, 
+            image_url, 
+            scheduled_time,
+            ...platforms
+        };
 
-      fetch(url, {
-        method: method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+        const method = draftId ? 'PUT' : 'POST';
+        const url = draftId ? `/drafts/${draftId}` : '/drafts/';
+
+        fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
         .then(response => {
-          if (!response.ok) {
-            return response.json().then(data => { throw new Error(data.detail || 'Failed to save draft'); });
-          }
-          return response.json();
+            if (!response.ok) {
+                return response.json().then(data => { throw new Error(data.detail || 'Failed to save draft'); });
+            }
+            return response.json();
         })
         .then(data => {
-          if (!draftId) {
-            activeEditors[editorId] = data.id;
-          }
-          if (showAlert) {
-            alert('Draft saved successfully');
-          }
+            if (!draftId) {
+                activeEditors[editorId] = data.id;
+            }
+            if (showAlert) {
+                alert('Draft saved successfully');
+            }
         })
         .catch(error => {
-          console.error('Draft save error:', error);
-          if (showAlert) {
-            alert('Failed to save draft: ' + error.message);
-          }
+            console.error('Draft save error:', error);
+            if (showAlert) {
+                alert('Failed to save draft: ' + error.message);
+            }
         });
     }
 
     // Save scheduled post edit
     function saveScheduledPostEdit(postId, editorId, showAlert = true) {
-      const editor = document.getElementById(editorId);
-      if (!editor) return;
+        const editor = document.getElementById(editorId);
+        if (!editor) return;
 
-      const textarea = editor.querySelector('textarea');
-      const content = textarea.value.trim();
+        const textarea = editor.querySelector('textarea');
+        const content = textarea.value.trim();
 
-      if (!content) {
-        if (showAlert) alert('Please add some content to your post');
-        return;
-      }
+        if (!content) {
+            if (showAlert) alert('Please add some content to your post');
+            return;
+        }
 
-      let image_url = "";
-      const imageContainer = editor.querySelector('.image-container');
-      if (imageContainer && imageContainer.style.display !== 'none') {
-        const imageInput = imageContainer.querySelector('input');
-        image_url = imageInput.value.trim();
-      }
+        let image_url = "";
+        const imageContainer = editor.querySelector('.image-container');
+        if (imageContainer && imageContainer.style.display !== 'none') {
+            const imageInput = imageContainer.querySelector('input');
+            image_url = imageInput.value.trim();
+        }
 
-      const dateInput = editor.querySelector('input[type="datetime-local"]');
-      const scheduledTime = dateInput.value;
-      if (!scheduledTime) {
-        if (showAlert) alert('Please select a schedule time');
-        return;
-      }
-      const scheduleDate = new Date(scheduledTime);
-      if (scheduleDate <= new Date()) {
-        if (showAlert) alert('Please select a future date and time');
-        return;
-      }
+        const dateInput = editor.querySelector('input[type="datetime-local"]');
+        const localScheduledTime = dateInput.value;
+        if (!localScheduledTime) {
+            if (showAlert) alert('Please select a schedule time');
+            return;
+        }
 
-      const payload = {
-        content,
-        image_url,
-        scheduled_time: scheduleDate.toISOString()
-      };
+        // Convert local input time to CST
+        const scheduleDate = new Date(localScheduledTime);
+        const now = new Date();
+        const cstNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+        
+        if (scheduleDate <= cstNow) {
+            if (showAlert) alert('Please select a future date and time');
+            return;
+        }
 
-      fetch(`/posts/${postId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+        // Convert to CST time string
+        const cstScheduleDate = new Date(scheduleDate.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+
+        // Get platform selections
+        const platforms = {
+            publish_to_twitter: editor.querySelector('[onclick*="twitter"]').classList.contains('active'),
+            publish_to_instagram: editor.querySelector('[onclick*="instagram"]').classList.contains('active'),
+            publish_to_facebook: editor.querySelector('[onclick*="facebook"]').classList.contains('active'),
+            publish_to_pinterest: editor.querySelector('[onclick*="pinterest"]').classList.contains('active')
+        };
+
+        // Check if at least one platform is selected when trying to save final changes
+        if (showAlert && !Object.values(platforms).some(value => value)) {
+            alert('Please select at least one platform to post to');
+            return;
+        }
+
+        const payload = {
+            content,
+            image_url,
+            scheduled_time: cstScheduleDate.toISOString(),
+            ...platforms
+        };
+
+        fetch(`/posts/${postId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
         .then(response => {
-          if (!response.ok) {
-            return response.json().then(data => { throw new Error(data.detail || 'Failed to update post'); });
-          }
-          return response.json();
+            if (!response.ok) {
+                return response.json().then(data => { throw new Error(data.detail || 'Failed to update post'); });
+            }
+            return response.json();
         })
         .then(data => {
-          if (showAlert) {
-            alert('Post updated successfully');
-            document.getElementById(editorId).remove();
-            delete editingPosts[editorId];
-            updateScheduledPosts();
-          }
+            if (showAlert) {
+                const scheduledTimeDisplay = new Date(cstScheduleDate).toLocaleString("en-US", {
+                    timeZone: "America/Chicago",
+                    dateStyle: "short",
+                    timeStyle: "short"
+                });
+                alert(`Post updated successfully for ${scheduledTimeDisplay}`);
+                document.getElementById(editorId).remove();
+                delete editingPosts[editorId];
+                updateScheduledPosts();
+            }
         })
         .catch(error => {
-          console.error('Update error:', error);
-          if (showAlert) {
-            alert('Failed to update post: ' + error.message);
-          }
+            console.error('Update error:', error);
+            if (showAlert) {
+                alert('Failed to update post: ' + error.message);
+            }
         });
     }
 
     // Load existing drafts from the server
     function loadDrafts() {
-      fetch('/drafts/')
-        .then(response => {
-          if (!response.ok) {
-            throw new Error('Failed to load drafts');
-          }
-          return response.json();
-        })
-        .then(drafts => {
-          drafts.forEach(draft => {
-            createEditorFromDraft(draft);
-          });
-        })
-        .catch(error => console.error("Error loading drafts:", error));
+        fetch('/drafts/')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Failed to load drafts');
+                }
+                return response.json();
+            })
+            .then(drafts => {
+                // Clear existing editors first
+                document.getElementById('post-editors').innerHTML = '';
+                
+                // Create editors for each draft
+                drafts.forEach(draft => {
+                    createEditorFromDraft(draft);
+                });
+            })
+            .catch(error => {
+                console.error("Error loading drafts:", error);
+                alert("Failed to load drafts: " + error.message);
+            });
     }
 
     // Create editor from a draft
@@ -343,18 +406,29 @@
       activeEditors[editorId] = draft.id;
 
       // Set platform states based on draft values
+      // After creating the editor HTML, set platform states and colors
       const editor = document.getElementById(editorId);
-      editor.querySelector('[onclick*="twitter"]').classList.toggle('active', draft.publish_to_twitter);
-      editor.querySelector('[onclick*="instagram"]').classList.toggle('active', draft.publish_to_instagram);
-      editor.querySelector('[onclick*="facebook"]').classList.toggle('active', draft.publish_to_facebook);
-      editor.querySelector('[onclick*="pinterest"]').classList.toggle('active', draft.publish_to_pinterest);
+      const platforms = {
+          'twitter': {active: draft.publish_to_twitter, color: 'text-blue-400'},
+          'instagram': {active: draft.publish_to_instagram, color: 'text-pink-500'},
+          'facebook': {active: draft.publish_to_facebook, color: 'text-blue-600'},
+          'pinterest': {active: draft.publish_to_pinterest, color: 'text-red-600'}
+      };
 
-      // Set initial icon colors if active
-      ['twitter', 'instagram', 'facebook', 'pinterest'].forEach(platform => {
-        const button = editor.querySelector(`[onclick*="${platform}"]`);
-        if (button.classList.contains('active')) {
-          togglePlatform(button, platform, editorId);
-        }
+      // Set initial state for each platform
+      Object.entries(platforms).forEach(([platform, config]) => {
+          const button = editor.querySelector(`[onclick*="${platform}"]`);
+          const icon = button.querySelector('i');
+          
+          if (config.active) {
+              button.classList.add('active', 'bg-gray-100');
+              icon.classList.remove('text-gray-400');
+              icon.classList.add(config.color);
+          } else {
+              button.classList.remove('active', 'bg-gray-100');
+              icon.classList.remove(config.color);
+              icon.classList.add('text-gray-400');
+          }
       });
 
       setupEditorListeners(editorId);
@@ -397,36 +471,29 @@
 
     // Toggle platform button function
     function togglePlatform(button, platform, editorId) {
-      // Toggle the active state visually with Tailwind classes
-      button.classList.toggle('bg-gray-100');
-      const icon = button.querySelector('i');
+        const platformConfig = {
+            'twitter': {color: 'text-blue-400'},
+            'instagram': {color: 'text-pink-500'},
+            'facebook': {color: 'text-blue-600'},
+            'pinterest': {color: 'text-red-600'}
+        };
 
-      if (button.classList.contains('bg-gray-100')) {
-        switch (platform) {
-          case 'twitter':
-            icon.classList.replace('text-gray-400', 'text-blue-400');
-            break;
-          case 'instagram':
-            icon.classList.replace('text-gray-400', 'text-pink-500');
-            break;
-          case 'facebook':
-            icon.classList.replace('text-gray-400', 'text-blue-600');
-            break;
-          case 'pinterest':
-            icon.classList.replace('text-gray-400', 'text-red-600');
-            break;
+        // Toggle the active state
+        const isActive = button.classList.toggle('active');
+        button.classList.toggle('bg-gray-100', isActive);
+        const icon = button.querySelector('i');
+
+        // Update icon color
+        if (isActive) {
+            icon.classList.remove('text-gray-400');
+            icon.classList.add(platformConfig[platform].color);
+        } else {
+            icon.classList.remove(platformConfig[platform].color);
+            icon.classList.add('text-gray-400');
         }
-      } else {
-        icon.classList.remove('text-blue-400', 'text-pink-500', 'text-blue-600', 'text-red-600');
-        icon.classList.add('text-gray-400');
-      }
 
-      // Auto-save platform selection
-      if (editingPosts[editorId]) {
-        saveScheduledPostEdit(editingPosts[editorId], editorId, false);
-      } else {
-        saveDraft(editorId, false);
-      }
+        // Always save when toggling platforms
+        saveDraft(editorId, false, true);
     }
 
     // Create a new post editor with platform toggles
@@ -515,84 +582,117 @@
       const textarea = editor.querySelector('textarea');
       const datetimeInput = editor.querySelector('input[type="datetime-local"]');
       const content = textarea.value.trim();
-      const scheduledTime = datetimeInput.value;
+      const localScheduledTime = datetimeInput.value;
 
       if (!content) {
-        alert('Please add some content to your post');
-        return;
+          alert('Please add some content to your post');
+          return;
       }
-      if (!scheduledTime) {
-        alert('Please select a schedule time');
-        return;
+      if (!localScheduledTime) {
+          alert('Please select a schedule time');
+          return;
       }
-      const scheduleDate = new Date(scheduledTime);
-      if (scheduleDate <= new Date()) {
-        alert('Please select a future date and time');
-        return;
+
+      // Convert local input time to CST
+      const scheduleDate = new Date(localScheduledTime);
+      const now = new Date();
+      const cstNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      
+      if (scheduleDate <= cstNow) {
+          alert('Please select a future date and time');
+          return;
       }
+
+      // Convert to CST time string
+      const cstScheduleDate = new Date(scheduleDate.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      
       let image_url = "";
       const imageContainer = editor.querySelector('.image-container');
       if (imageContainer && imageContainer.style.display !== 'none') {
-        const imageInput = imageContainer.querySelector('input');
-        image_url = imageInput.value.trim();
+          const imageInput = imageContainer.querySelector('input');
+          image_url = imageInput.value.trim();
       }
 
       // Get platform selections
       const platforms = {
-        publish_to_twitter: editor.querySelector('[onclick*="twitter"]').classList.contains('active'),
-        publish_to_instagram: editor.querySelector('[onclick*="instagram"]').classList.contains('active'),
-        publish_to_facebook: editor.querySelector('[onclick*="facebook"]').classList.contains('active'),
-        publish_to_pinterest: editor.querySelector('[onclick*="pinterest"]').classList.contains('active')
+          publish_to_twitter: editor.querySelector('[onclick*="twitter"]').classList.contains('active'),
+          publish_to_instagram: editor.querySelector('[onclick*="instagram"]').classList.contains('active'),
+          publish_to_facebook: editor.querySelector('[onclick*="facebook"]').classList.contains('active'),
+          publish_to_pinterest: editor.querySelector('[onclick*="pinterest"]').classList.contains('active')
       };
+
+      // Check if at least one platform is selected
+      if (!Object.values(platforms).some(value => value)) {
+          alert('Please select at least one platform to post to');
+          return;
+      }
 
       const draftId = activeEditors[editorId];
       const payload = {
-        content,
-        image_url,
-        scheduled_time: scheduledTime,
-        ...platforms
+          content,
+          image_url,
+          scheduled_time: cstScheduleDate.toISOString(),
+          ...platforms
       };
 
+
+
+      // In the schedulePost function, replace the draft handling section:
       if (draftId) {
-        fetch(`/posts/${draftId}/schedule`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scheduled_time: scheduledTime, ...platforms })
-        })
+          fetch(`/posts/${draftId}/schedule`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  scheduled_time: cstScheduleDate.toISOString(),  // Use the CST time we calculated
+                  ...platforms 
+              })
+          })
           .then(response => {
-            if (!response.ok) {
-              return response.json().then(data => { throw new Error(data.detail || 'Failed to schedule draft'); });
-            }
-            return response.json();
+              if (!response.ok) {
+                  return response.json().then(data => { throw new Error(data.detail || 'Failed to schedule draft'); });
+              }
+              return response.json();
           })
           .then(data => {
-            alert(`Post scheduled successfully for ${scheduledTime}`);
-            delete activeEditors[editorId];
-            document.getElementById(editorId).remove();
-            updateScheduledPosts();
+              // Format the time for display
+              const scheduledTimeDisplay = new Date(cstScheduleDate).toLocaleString("en-US", {
+                  timeZone: "America/Chicago",
+                  dateStyle: "short",
+                  timeStyle: "short"
+              });
+              alert(`Post scheduled successfully for ${scheduledTimeDisplay}`);
+              delete activeEditors[editorId];
+              document.getElementById(editorId).remove();
+              updateScheduledPosts();
           })
           .catch(error => {
-            alert(error.message);
+              alert(error.message);
           });
       } else {
-        fetch('/posts/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        })
+          fetch('/posts/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          })
           .then(response => {
-            if (!response.ok) {
-              return response.json().then(data => { throw new Error(data.detail || 'Failed to schedule post'); });
-            }
-            return response.json();
+              if (!response.ok) {
+                  return response.json().then(data => { throw new Error(data.detail || 'Failed to schedule post'); });
+              }
+              return response.json();
           })
           .then(data => {
-            alert(`Post scheduled successfully for ${scheduledTime}`);
-            editor.remove();
-            updateScheduledPosts();
+              // Format the time for display
+              const scheduledTimeDisplay = new Date(cstScheduleDate).toLocaleString("en-US", {
+                  timeZone: "America/Chicago",
+                  dateStyle: "short",
+                  timeStyle: "short"
+              });
+              alert(`Post scheduled successfully for ${scheduledTimeDisplay}`);
+              editor.remove();
+              updateScheduledPosts();
           })
           .catch(error => {
-            alert(error.message);
+              alert(error.message);
           });
       }
     }
@@ -680,89 +780,114 @@
     }
 
     function editPost(postId) {
-      const postCard = document.getElementById(`post-card-${postId}`);
-      if (postCard) {
-        postCard.style.display = 'none';
-      }
-      fetch(`/posts/${postId}`)
-        .then(response => {
-          if (!response.ok) {
-            return response.json().then(data => { throw new Error(data.detail || 'Failed to load post'); });
-          }
-          return response.json();
-        })
-        .then(post => {
-          const editorId = 'editor-' + Date.now();
-          const editorsDiv = document.getElementById('post-editors');
-          let scheduledTime = getDefaultScheduleTime();
-          if (post.scheduled_time) {
-            try {
-              const dt = new Date(post.scheduled_time);
-              scheduledTime = dt.getFullYear() + '-' +
-                String(dt.getMonth() + 1).padStart(2, '0') + '-' +
-                String(dt.getDate()).padStart(2, '0') + 'T' +
-                String(dt.getHours()).padStart(2, '0') + ':' +
-                String(dt.getMinutes()).padStart(2, '0');
-            } catch (e) {
-              console.error("Error parsing scheduled time:", e);
-            }
-          }
-          const editorHTML = `
-            <div id="${editorId}" class="post-editor bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
-              <div class="flex justify-between items-center mb-3">
-                <span class="font-bold text-base md:text-lg">Edit Scheduled Post #${post.id}</span>
-                <div>
-                  <span class="text-xs md:text-sm text-green-600 bg-green-100 px-2 py-1 rounded mr-2 autosave-status">Autosaving Enabled</span>
-                  <button onclick="removePostEditor('${editorId}')" class="text-red-500 hover:text-red-700 font-bold text-sm md:text-base">Cancel Edit</button>
-                </div>
-              </div>
-              <div class="space-y-3 flex-grow">
-                <div>
-                  <label class="block text-sm font-bold mb-2">Schedule For</label>
-                  <input type="datetime-local" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" value="${scheduledTime}">
-                </div>
-                <div>
-                  <label class="block text-sm font-bold mb-2">Post Content</label>
-                  <div class="flex gap-2 mb-2">
-                    <textarea class="w-full p-2 md:p-4 h-20 md:h-24 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="What's happening?">${post.content || ''}</textarea>
-                    <button onclick="regenerateEditorPost('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
-                      <i class="fas fa-sync-alt"></i>
-                    </button>
-                  </div>
-                </div>
-                <div class="status-log text-xs md:text-sm text-gray-600" style="display:none;"></div>
-                <div class="space-y-3">
-                  <div class="flex items-center justify-between">
-                    <label class="text-sm font-bold">Image</label>
-                    <button onclick="toggleEditorImage('${editorId}')" class="text-xs md:text-sm text-post-accent hover:underline">Toggle Image</button>
-                  </div>
-                  <div class="image-container" style="${post.image_url ? 'display: block;' : 'display: none;'}">
-                    <img src="${post.image_url || 'https://placehold.co/600x400?text=Add%20Image%20to%20Preview'}" alt="Post image" class="w-full h-36 md:h-48 object-cover neo-border-sm rounded-lg mb-3">
-                    <div class="flex gap-2">
-                      <input type="text" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="Image URL" oninput="updateImagePreview(this)" value="${post.image_url || ''}">
-                      <button onclick="regenerateEditorImage('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
-                        <i class="fas fa-sync-alt"></i>
-                      </button>
+        const postCard = document.getElementById(`post-card-${postId}`);
+        if (postCard) {
+            postCard.style.display = 'none';
+        }
+        fetch(`/posts/${postId}`)
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => { throw new Error(data.detail || 'Failed to load post'); });
+                }
+                return response.json();
+            })
+            .then(post => {
+                const editorId = 'editor-' + Date.now();
+                const editorsDiv = document.getElementById('post-editors');
+                let scheduledTime = getDefaultScheduleTime();
+                if (post.scheduled_time) {
+                    try {
+                        const dt = new Date(post.scheduled_time);
+                        const cstDate = new Date(dt.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+                        scheduledTime = cstDate.getFullYear() + '-' +
+                            String(cstDate.getMonth() + 1).padStart(2, '0') + '-' +
+                            String(cstDate.getDate()).padStart(2, '0') + 'T' +
+                            String(cstDate.getHours()).padStart(2, '0') + ':' +
+                            String(cstDate.getMinutes()).padStart(2, '0');
+                    } catch (e) {
+                        console.error("Error parsing scheduled time:", e);
+                    }
+                }
+                const editorHTML = `
+                    <div id="${editorId}" class="post-editor bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
+                        <div class="flex justify-between items-center mb-3">
+                            <span class="font-bold text-base md:text-lg">Edit Scheduled Post #${post.id}</span>
+                            <div>
+                                <span class="text-xs md:text-sm text-green-600 bg-green-100 px-2 py-1 rounded mr-2 autosave-status">Autosaving Enabled</span>
+                                <button onclick="removePostEditor('${editorId}')" class="text-red-500 hover:text-red-700 font-bold text-sm md:text-base">Cancel Edit</button>
+                            </div>
+                        </div>
+                        <div class="space-y-3 flex-grow">
+                            <div>
+                                <label class="block text-sm font-bold mb-2">Schedule For</label>
+                                <input type="datetime-local" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" value="${scheduledTime}">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-bold mb-2">Post Content</label>
+                                <div class="flex gap-2 mb-2">
+                                    <textarea class="w-full p-2 md:p-4 h-20 md:h-24 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="What's happening?">${post.content || ''}</textarea>
+                                    <button onclick="regenerateEditorPost('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                                        <i class="fas fa-sync-alt"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="status-log text-xs md:text-sm text-gray-600" style="display:none;"></div>
+                            <div class="space-y-3">
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm font-bold">Image</label>
+                                    <button onclick="toggleEditorImage('${editorId}')" class="text-xs md:text-sm text-post-accent hover:underline">Toggle Image</button>
+                                </div>
+                                <div class="image-container" style="${post.image_url ? 'display: block;' : 'display: none;'}">
+                                    <img src="${post.image_url || 'https://placehold.co/600x400?text=Add%20Image%20to%20Preview'}" alt="Post image" class="w-full h-36 md:h-48 object-cover neo-border-sm rounded-lg mb-3">
+                                    <div class="flex gap-2">
+                                        <input type="text" class="w-full p-2 md:p-4 neo-border-sm bg-post-neutral text-sm md:text-base" placeholder="Image URL" oninput="updateImagePreview(this)" value="${post.image_url || ''}">
+                                        <button onclick="regenerateEditorImage('${editorId}')" class="bg-post-accent text-white p-2 md:p-3 font-bold neo-border-sm flex-shrink-0">
+                                            <i class="fas fa-sync-alt"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="platform-toggles flex gap-3 items-center mt-4 mb-2">
+                            <span class="text-sm font-bold mr-2">Post to:</span>
+                            <button onclick="togglePlatform(this, 'twitter', '${editorId}')" 
+                                class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200 ${post.publish_to_twitter ? 'active bg-gray-100' : ''}" 
+                                title="Twitter/X">
+                                <i class="fab fa-x-twitter text-xl md:text-2xl ${post.publish_to_twitter ? 'text-blue-400' : 'text-gray-400'}"></i>
+                            </button>
+                            <button onclick="togglePlatform(this, 'instagram', '${editorId}')" 
+                                class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200 ${post.publish_to_instagram ? 'active bg-gray-100' : ''}" 
+                                title="Instagram">
+                                <i class="fab fa-instagram text-xl md:text-2xl ${post.publish_to_instagram ? 'text-pink-500' : 'text-gray-400'}"></i>
+                            </button>
+                            <button onclick="togglePlatform(this, 'facebook', '${editorId}')" 
+                                class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200 ${post.publish_to_facebook ? 'active bg-gray-100' : ''}" 
+                                title="Facebook">
+                                <i class="fab fa-facebook text-xl md:text-2xl ${post.publish_to_facebook ? 'text-blue-600' : 'text-gray-400'}"></i>
+                            </button>
+                            <button onclick="togglePlatform(this, 'pinterest', '${editorId}')" 
+                                class="p-2 rounded transition-all duration-200 hover:bg-gray-100 active:bg-gray-200 ${post.publish_to_pinterest ? 'active bg-gray-100' : ''}" 
+                                title="Pinterest">
+                                <i class="fab fa-pinterest text-xl md:text-2xl ${post.publish_to_pinterest ? 'text-red-600' : 'text-gray-400'}"></i>
+                            </button>
+                        </div>
+                        <div class="flex gap-3 mt-4">
+                            <button onclick="finishEditing('${editorId}')" class="bg-green-500 text-white px-3 py-2 md:px-4 md:py-2 font-bold neo-border-sm rounded text-sm md:text-base">
+                                Done
+                            </button>
+                        </div>
                     </div>
-                  </div>
-                </div>
-              </div>
-              <div class="flex gap-3 mt-4">
-                <button onclick="finishEditing('${editorId}')" class="bg-green-500 text-white px-3 py-2 md:px-4 md:py-2 font-bold neo-border-sm rounded text-sm md:text-base">
-                  Done
-                </button>
-              </div>
-            </div>
-          `;
-          editorsDiv.insertAdjacentHTML('beforeend', editorHTML);
-          editingPosts[editorId] = post.id;
-          setupEditorListeners(editorId);
-          document.getElementById(editorId).scrollIntoView({ behavior: 'smooth' });
-        })
-        .catch(error => {
-          alert('Failed to load post for editing: ' + error.message);
-        });
+                `;
+                editorsDiv.insertAdjacentHTML('beforeend', editorHTML);
+                editingPosts[editorId] = post.id;
+                setupEditorListeners(editorId);
+                document.getElementById(editorId).scrollIntoView({ behavior: 'smooth' });
+            })
+            .catch(error => {
+                alert('Failed to load post for editing: ' + error.message);
+            });
     }
+
 
     function finishEditing(editorId) {
       if (editingPosts[editorId]) {
@@ -780,24 +905,46 @@
     function renderPostCard(post) {
       const scheduled = post.scheduled_time ? new Date(post.scheduled_time) : null;
       const now = new Date();
+      const cstNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
       let status;
       if (post.is_draft) {
-        status = { status: "Draft", class: "bg-purple-300 text-purple-800" };
+          status = { status: "Draft", class: "bg-purple-300 text-purple-800" };
       } else if (post.is_canceled) {
-        status = { status: "Canceled", class: "bg-red-300 text-red-800" };
+          status = { status: "Canceled", class: "bg-red-300 text-red-800" };
       } else if (post.is_published) {
-        status = { status: "Posted", class: "bg-gray-300 text-gray-800" };
-      } else if (scheduled && scheduled <= now) {
-        status = { status: "Pending", class: "bg-blue-300 text-blue-800" };
+          status = { status: "Posted", class: "bg-gray-300 text-gray-800" };
+      } else if (scheduled && scheduled <= cstNow) {
+          status = { status: "Pending", class: "bg-blue-300 text-blue-800" };
       } else {
-        status = { status: "Scheduled", class: "bg-green-300 text-green-800" };
+          status = { status: "Scheduled", class: "bg-green-300 text-green-800" };
       }
-      const scheduledTime = post.scheduled_time ? new Date(post.scheduled_time).toLocaleString() : '';
+      
+      // Format the time in CST
+      const scheduledTime = post.scheduled_time ? 
+          new Date(post.scheduled_time).toLocaleString("en-US", { 
+              timeZone: "America/Chicago",
+              dateStyle: "short",
+              timeStyle: "short"
+          }) : '';
+
+      // Platform icons
+      const platformIcons = `
+        <div class="flex gap-1 items-center ml-2 border-l border-gray-400 pl-2">
+          ${post.publish_to_twitter ? '<i class="fab fa-x-twitter"></i>' : ''}
+          ${post.publish_to_instagram ? '<i class="fab fa-instagram"></i>' : ''}
+          ${post.publish_to_facebook ? '<i class="fab fa-facebook"></i>' : ''}
+          ${post.publish_to_pinterest ? '<i class="fab fa-pinterest"></i>' : ''}
+        </div>
+      `;
+
       return `
         <div id="post-card-${post.id}" class="post-card bg-white p-4 md:p-6 neo-border rounded-xl h-full flex flex-col">
           <div class="flex justify-between items-center mb-3">
             <span class="font-bold text-base md:text-lg">Post #${post.id}</span>
-            <span class="status-badge px-2 py-1 rounded text-xs md:text-sm ${status.class}">${status.status}</span>
+            <div class="flex items-center">
+              <span class="status-badge px-2 py-1 rounded text-xs md:text-sm ${status.class}">${status.status}</span>
+              ${platformIcons}
+            </div>
           </div>
           <div class="mb-3">
             ${scheduledTime ? `<p class="text-xs md:text-sm text-gray-600 mb-2">Scheduled: ${scheduledTime}</p>` : ''}
@@ -968,7 +1115,7 @@
       setupAutosave();
       updateScheduledPosts();
     });
-
+    window.addEventListener('load', loadDrafts);
     setInterval(updateScheduledPosts, 5000);
   </script>
 </body>

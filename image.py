@@ -33,7 +33,7 @@ class TweetImageEvaluator:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     engagement_score INTEGER DEFAULT 0,
-                    publish_to_twitter BOOLEAN DEFAULT TRUE,
+                    publish_to_twitter BOOLEAN DEFAULT FALSE,
                     publish_to_instagram BOOLEAN DEFAULT FALSE,
                     publish_to_facebook BOOLEAN DEFAULT FALSE,
                     publish_to_pinterest BOOLEAN DEFAULT FALSE,

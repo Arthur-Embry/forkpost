@@ -447,7 +447,15 @@ class SocialMediaPoster:
     async def post_to_platforms(self, content, image_url, platforms):
         results = {}
         
-        if platforms.get('twitter'):
+        # Ensure platforms is a dict with boolean values
+        platforms = {
+            'twitter': bool(platforms.get('publish_to_twitter', False)),
+            'instagram': bool(platforms.get('publish_to_instagram', False)),
+            'facebook': bool(platforms.get('publish_to_facebook', False)),
+            'pinterest': bool(platforms.get('publish_to_pinterest', False))
+        }
+
+        if platforms['twitter']:
             try:
                 result = await asyncio.to_thread(
                     self.twitter_poster.post_image_from_url, 
@@ -459,7 +467,7 @@ class SocialMediaPoster:
                 print(f"Twitter posting error: {e}")
                 results['twitter_post_id'] = None
 
-        if platforms.get('instagram'):
+        if platforms['instagram']:
             try:
                 result = await asyncio.to_thread(
                     self.instagram_poster.post_image_from_url, 
@@ -471,7 +479,7 @@ class SocialMediaPoster:
                 print(f"Instagram posting error: {e}")
                 results['instagram_post_id'] = None
 
-        if platforms.get('facebook'):
+        if platforms['facebook']:
             try:
                 result = await asyncio.to_thread(
                     self.facebook_poster.post_image_from_url, 
@@ -483,13 +491,13 @@ class SocialMediaPoster:
                 print(f"Facebook posting error: {e}")
                 results['facebook_post_id'] = None
 
-        if platforms.get('pinterest'):
+        if platforms['pinterest']:
             try:
                 result = await asyncio.to_thread(
                     self.pinterest_poster.post_image_from_url, 
                     image_url, 
-                    content, 
-                    content
+                    content,  # Used as title
+                    content   # Used as description
                 )
                 results['pinterest_post_id'] = result.get('id')
             except Exception as e:

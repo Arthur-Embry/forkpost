@@ -1,7 +1,7 @@
 import asyncio
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, HTTPException, Query
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -91,7 +91,6 @@ def get_db():
 def init_db():
     conn = get_db()
     c = conn.cursor()
-    # Modified schema definition
     c.execute('''CREATE TABLE IF NOT EXISTS posts
                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
                  content TEXT,
@@ -103,7 +102,7 @@ def init_db():
                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                  engagement_score INTEGER DEFAULT 0,
-                 publish_to_twitter BOOLEAN DEFAULT TRUE,
+                 publish_to_twitter BOOLEAN DEFAULT FALSE,
                  publish_to_instagram BOOLEAN DEFAULT FALSE,
                  publish_to_facebook BOOLEAN DEFAULT FALSE,
                  publish_to_pinterest BOOLEAN DEFAULT FALSE,
@@ -130,13 +129,25 @@ def to_cst(dt_str):
     if not isinstance(dt_str, str):
         # Convert non-string to string if needed
         dt_str = str(dt_str)
+    
+    try:
+        # Parse the datetime string
+        if 'T' in dt_str:
+            dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        else:
+            dt = datetime.fromisoformat(dt_str)
         
-    dt = datetime.fromisoformat(dt_str)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=ZoneInfo("America/Chicago"))
-    else:
-        dt = dt.astimezone(ZoneInfo("America/Chicago"))
-    return dt.isoformat()
+        # If no timezone info, assume UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+            
+        # Convert to CST
+        dt_cst = dt.astimezone(ZoneInfo("America/Chicago"))
+        return dt_cst.isoformat()
+    except ValueError as e:
+        print(f"Error parsing datetime: {e}")
+        # Return a default future time if parsing fails
+        return (datetime.now(ZoneInfo("America/Chicago")) + timedelta(days=1)).isoformat()
 
 # ---------------------------
 # API Endpoints
@@ -190,15 +201,14 @@ async def generate_post_image(request: GenerateImageRequest):
 async def create_scheduled_post(post: PostCreate):
     if not post.scheduled_time:
         raise HTTPException(status_code=400, detail="Scheduled time is required")
-        
-    scheduled_cst = post.scheduled_time.replace(tzinfo=ZoneInfo("America/Chicago"))
+    
+    # Convert the incoming UTC time to CST
+    utc_time = post.scheduled_time.replace(tzinfo=timezone.utc)
+    scheduled_cst = utc_time.astimezone(ZoneInfo("America/Chicago"))
     now_cst = datetime.now(ZoneInfo("America/Chicago"))
+    
     if scheduled_cst <= now_cst:
         raise HTTPException(status_code=400, detail="Scheduled time must be in the future (CST)")
-    
-    if not post.content:
-        generated = await generate_post_text()
-        post.content = generated["tweet_text"]
     
     conn = get_db()
     cursor = conn.cursor()
@@ -211,9 +221,13 @@ async def create_scheduled_post(post: PostCreate):
             )
             VALUES (?, ?, ?, 0, ?, ?, ?, ?)
         ''', (
-            post.content, post.image_url, scheduled_cst.isoformat(),
-            post.publish_to_twitter, post.publish_to_instagram,
-            post.publish_to_facebook, post.publish_to_pinterest
+            post.content, 
+            post.image_url, 
+            scheduled_cst.isoformat(),  # Store as CST
+            post.publish_to_twitter or False,
+            post.publish_to_instagram or False,
+            post.publish_to_facebook or False,
+            post.publish_to_pinterest or False
         ))
         post_id = cursor.lastrowid
         conn.commit()
@@ -458,9 +472,22 @@ async def create_draft(post: PostCreate):
             scheduled_time = post.scheduled_time.replace(tzinfo=ZoneInfo("America/Chicago")).isoformat()
             
         cursor.execute('''
-            INSERT INTO posts (content, image_url, scheduled_time, is_draft, updated_at)
-            VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
-        ''', (post.content or '', post.image_url or '', scheduled_time))
+            INSERT INTO posts (
+                content, image_url, scheduled_time, is_draft, 
+                publish_to_twitter, publish_to_instagram, 
+                publish_to_facebook, publish_to_pinterest, 
+                updated_at
+            )
+            VALUES (?, ?, ?, 1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (
+            post.content or '', 
+            post.image_url or '', 
+            scheduled_time,
+            post.publish_to_twitter,
+            post.publish_to_instagram,
+            post.publish_to_facebook,
+            post.publish_to_pinterest
+        ))
         
         post_id = cursor.lastrowid
         conn.commit()
@@ -470,14 +497,13 @@ async def create_draft(post: PostCreate):
         if db_post["scheduled_time"] is not None:
             db_post["scheduled_time"] = to_cst(db_post["scheduled_time"])
         else:
-            # Use a future date as placeholder
             default_time = datetime.now(ZoneInfo("America/Chicago")) + timedelta(days=1)
             db_post["scheduled_time"] = default_time.isoformat()
             
         return db_post
     finally:
         conn.close()
-
+        
 @app.put("/drafts/{post_id}", response_model=PostResponse)
 async def update_draft(post_id: int, post: PostCreate):
     conn = get_db()
@@ -494,9 +520,25 @@ async def update_draft(post_id: int, post: PostCreate):
             
         cursor.execute('''
             UPDATE posts 
-            SET content = ?, image_url = ?, scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
+            SET content = ?, 
+                image_url = ?, 
+                scheduled_time = ?, 
+                publish_to_twitter = ?,
+                publish_to_instagram = ?,
+                publish_to_facebook = ?,
+                publish_to_pinterest = ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-        ''', (post.content or '', post.image_url or '', scheduled_time, post_id))
+        ''', (
+            post.content or '', 
+            post.image_url or '', 
+            scheduled_time,
+            post.publish_to_twitter,
+            post.publish_to_instagram,
+            post.publish_to_facebook,
+            post.publish_to_pinterest,
+            post_id
+        ))
         conn.commit()
         cursor.execute('SELECT * FROM posts WHERE id = ?', (post_id,))
         updated_post = dict(cursor.fetchone())
