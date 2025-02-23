@@ -40,12 +40,6 @@ def main():
         print(f"Successfully posted to Pinterest! Post ID: {post_id}")
     except Exception as e:
         print(f"Failed to post to Pinterest: {str(e)}")"""
-    # Post to Instagram
-    try:
-        media_id = instagram_poster.post_image_from_url(test_image, test_caption)
-        print(f"Successfully posted to Instagram! Media ID: {media_id}")
-    except Exception as e:
-        print(f"Failed to post to Instagram: {str(e)}")
         
 if __name__ == "__main__":
     main()
